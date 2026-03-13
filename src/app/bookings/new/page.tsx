@@ -1,12 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 
 interface PropertyOption {
   id: number;
   name: string;
   roomTypes?: { id: number; name: string }[];
+}
+
+interface PlanInfo {
+  plan: { id: string; name: string; pricePerExtraNight: number };
+  totalNights: number;
+  freeNights: number;
+  paidNights: number;
+  extraCharge: number;
 }
 
 export default function NewBookingPage() {
@@ -30,6 +38,8 @@ export default function NewBookingPage() {
     status: "confirmed",
   });
 
+  const [planInfo, setPlanInfo] = useState<PlanInfo | null>(null);
+
   useEffect(() => {
     fetch("/api/properties")
       .then((r) => r.json())
@@ -38,9 +48,31 @@ export default function NewBookingPage() {
       });
   }, []);
 
+  // 日程が変わったらプラン判定
+  const nights = useMemo(() => {
+    if (!form.arrival || !form.departure) return 0;
+    const a = new Date(form.arrival);
+    const d = new Date(form.departure);
+    const diff = d.getTime() - a.getTime();
+    return Math.max(0, Math.round(diff / (1000 * 60 * 60 * 24)));
+  }, [form.arrival, form.departure]);
+
+  useEffect(() => {
+    if (nights <= 0) {
+      setPlanInfo(null);
+      return;
+    }
+    fetch(`/api/plans?nights=${nights}`)
+      .then((r) => r.json())
+      .then(setPlanInfo)
+      .catch(() => setPlanInfo(null));
+  }, [nights]);
+
   const selectedProperty = properties.find(
     (p) => p.id === Number(form.propertyId)
   );
+
+  const needsPaidPlan = planInfo && planInfo.paidNights > 0;
 
   function updateForm(field: string, value: string) {
     setForm((prev) => ({ ...prev, [field]: value }));
@@ -73,6 +105,14 @@ export default function NewBookingPage() {
 
       const data = await res.json();
       if (res.ok) {
+        if (data.split) {
+          alert(
+            `予約を分割して登録しました！\n\n` +
+            `■ 無料プラン: ${data.freeNights}泊（¥0）\n` +
+            `■ ${data.plan}: ${data.paidNights}泊（¥${data.extraCharge.toLocaleString()}）\n\n` +
+            `同じゲスト名で2件の予約が作成されました。`
+          );
+        }
         router.push("/bookings");
       } else {
         setError(data.error || "予約の作成に失敗しました");
@@ -168,6 +208,45 @@ export default function NewBookingPage() {
             />
           </div>
         </div>
+
+        {/* プラン表示 */}
+        {nights > 0 && planInfo && (
+          <div
+            className={`rounded-lg border p-4 ${
+              needsPaidPlan
+                ? "border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950"
+                : "border-green-300 bg-green-50 dark:border-green-700 dark:bg-green-950"
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                  {nights}泊 → 適用プラン:
+                  <span className="ml-1 font-bold">{planInfo.plan.name}</span>
+                </p>
+                <div className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                  <span className="text-green-600">{planInfo.freeNights}泊 無料</span>
+                  {planInfo.paidNights > 0 && (
+                    <span className="ml-2 text-amber-600">
+                      + {planInfo.paidNights}泊 有料
+                      (@ {planInfo.plan.pricePerExtraNight.toLocaleString()}円/泊)
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="text-right">
+                <p className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+                  {planInfo.extraCharge === 0
+                    ? "¥0"
+                    : `¥${planInfo.extraCharge.toLocaleString()}`}
+                </p>
+                {needsPaidPlan && (
+                  <p className="text-xs text-amber-600">有料プラン適用</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ゲスト情報 */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -283,7 +362,11 @@ export default function NewBookingPage() {
             disabled={loading}
             className="rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
-            {loading ? "登録中..." : "予約を登録"}
+            {loading
+              ? "登録中..."
+              : needsPaidPlan
+                ? `有料プランで予約 (¥${planInfo!.extraCharge.toLocaleString()})`
+                : "予約を登録（無料）"}
           </button>
           <button
             type="button"
